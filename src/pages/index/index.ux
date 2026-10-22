@@ -1,49 +1,150 @@
 <template>
-  <div class="demo-page">
-    <text class="title">{{$t('a.b')}},欢迎打开{{title}}</text>
-    <!-- 点击跳转详情页 -->
-    <input class="btn" type="button" value="跳转到详情页" onclick="routeDetail" />
+  <div class="page">
+    <scroll class="scroll" scroll-y="true">
+      <div class="content">
+        <text class="brand">D R I N K Y</text>
+        <text class="muted">今天，慢慢喝</text>
+        <text class="amount">{{total}}</text>
+        <text class="muted">/ {{goal}} ml</text>
+        <div class="track"><div class="fill" style="width: {{percent}}%;"></div></div>
+        <text class="status">{{status}}</text>
+        <text class="notice" if="message">{{message}}</text>
+        <input class="primary" type="button" value="喝水啦 +{{cup}} ml" onclick="addWater" disabled="{{!ready || saving}}" />
+        <input class="secondary" type="button" value="{{due ? '10 分钟后提醒' : '撤销上一杯'}}" onclick="secondaryAction" disabled="{{!ready || saving}}" />
+        <text class="last">{{lastDrink}}</text>
+        <input class="link" type="button" value="提醒与设置 ›" onclick="openSettings" disabled="{{saving}}" />
+        <text class="footer">一小杯，也算进步。</text>
+      </div>
+    </scroll>
   </div>
 </template>
 
 <script>
+import storage from '@system.storage'
+import vibrator from '@system.vibrator'
 import router from '@system.router'
-import configuration from '@system.configuration'
+const hydration = require('../../common/hydration')
+const KEY = 'drinky.state.v1'
 
 export default {
-  // 页面级组件的数据模型，影响传入数据的覆盖机制：private内定义的属性不允许被覆盖
   private: {
-    title: '示例页面'
+    total: 0, goal: 2000, cup: 250, interval: 60, percent: 0,
+    enabled: true, quiet: true, ready: false,
+    saving: false, due: false, message: '', reloadSettings: false,
+    status: '正在读取记录…', lastDrink: '今天的第一杯，从现在开始'
   },
-
-  routeDetail() {
-    // 跳转到应用内的某个页面，router用法详见：文档->接口->页面路由
-    router.push({
-      uri: '/pages/detail'
+  onInit() {
+    this.loadState()
+  },
+  loadState() {
+    this.ready = false
+    storage.get({
+      key: KEY,
+      success: raw => {
+        this.state = hydration.restore(raw, Date.now())
+        this.ready = true
+        this.refresh()
+      },
+      fail: () => { this.message = '记录读取失败，请重新打开应用'; this.status = '暂时无法记录' }
     })
+  },
+  onShow() {
+    this.stopTimer()
+    if (this.reloadSettings) {
+      this.reloadSettings = false
+      this.message = ''
+      this.due = false
+      this.loadState()
+    }
+    this.refresh()
+    this.timer = setInterval(() => this.refresh(), 1000)
+  },
+  onHide() { this.stopTimer() },
+  onDestroy() { this.stopTimer() },
+  stopTimer() { if (this.timer) { clearInterval(this.timer); this.timer = null } },
+  refresh() {
+    if (!this.ready) return
+    const now = Date.now()
+    if (this.state.day !== hydration.dayKey(now)) {
+      if (this.saving) return
+      this.state = hydration.restore(JSON.stringify(this.state), now)
+      this.due = false
+    }
+    const s = this.state
+    this.total = s.total
+    this.goal = s.goal
+    this.cup = s.cup
+    this.interval = s.interval
+    this.enabled = s.enabled
+    this.quiet = s.quiet
+    this.percent = Math.min(100, Math.round(s.total / s.goal * 100))
+    const hour = new Date(now).getHours()
+    if (!s.enabled || s.total >= s.goal || (s.quiet && (hour >= 22 || hour < 8))) this.due = false
+    if (hydration.isDue(s, now) && !this.due) {
+      this.due = true
+      this.vibrate()
+    }
+    this.status = s.total >= s.goal ? '今日目标已完成' : !s.enabled ? '应用内提醒已暂停' :
+      s.quiet && (hour >= 22 || hour < 8) ? '夜间休息，早上再见' :
+      this.due ? '喝口水，休息一下' : Math.max(1, Math.ceil((s.nextAt - now) / 60000)) + ' 分钟后提醒'
+    const record = s.records[s.records.length - 1]
+    this.lastDrink = record ? '上一杯 ' + this.timeLabel(record.at) + ' · ' + record.amount + ' ml' : '今天的第一杯，从现在开始'
+  },
+  timeLabel(at) {
+    const d = new Date(at)
+    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2)
+  },
+  save(next, message) {
+    if (!this.ready || this.saving) return
+    this.saving = true
+    storage.set({
+      key: KEY, value: JSON.stringify(next),
+      success: () => { this.state = next; this.due = false; this.message = message; this.refresh() },
+      fail: () => { this.message = '保存失败，请重试' },
+      complete: () => { this.saving = false }
+    })
+  },
+  addWater() { this.save(hydration.drink(this.state, this.state.cup, Date.now()), '已记下这一杯') },
+  secondaryAction() {
+    if (this.due) {
+      const next = hydration.restore(JSON.stringify(this.state), Date.now())
+      next.nextAt = Date.now() + 10 * 60000
+      this.save(next, '稍后再提醒你')
+    } else {
+      this.save(hydration.undo(this.state, Date.now()), '已撤销上一杯')
+    }
+  },
+  openSettings() {
+    if (this.saving) return
+    this.reloadSettings = true
+    router.push({ uri: '/pages/settings' })
+  },
+  vibrate() {
+    try { vibrator.vibrate({ mode: 'short' }) } catch (error) { this.message = '当前设备无法振动' }
   }
 }
 </script>
 
 <style>
-.demo-page {
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
+.page { width: 100%; height: 100%; background-color: #000000; }
+.scroll { width: 100%; height: 100%; flex-direction: column; align-items: flex-start; }
+/* Keep the scroll content at its natural height, without compressing rows.
+   Vela defaults flex-shrink to 1, which can squeeze rows below their text. */
+.content, .brand, .muted, .amount, .track, .status, .notice,
+.primary, .secondary, .last, .link, .footer {
+  flex-shrink: 0;
 }
-
-.title {
-  font-size: 20px;
-  text-align: center;
-}
-
-.btn {
-  width: 200px;
-  height: 40px;
-  margin-top: 20px;
-  border-radius: 5px;
-  background-color: #09ba07;
-  font-size: 20px;
-  color: #ffffff;
-}
+.content { width: 100%; padding: 28px 14px 32px; flex-direction: column; align-items: center; }
+.brand { font-size: 14px; color: #73dfed; margin-bottom: 12px; }
+.muted { font-size: 14px; color: #8b9ca5; text-align: center; }
+.amount { font-size: 48px; color: #ffffff; margin-top: 8px; }
+.track { width: 100%; height: 5px; background-color: #203036; border-radius: 3px; margin-top: 16px; }
+.fill { height: 5px; background-color: #73dfed; border-radius: 3px; }
+.status { color: #73dfed; font-size: 15px; margin-top: 16px; margin-bottom: 14px; text-align: center; }
+.notice { color: #eacb8d; font-size: 13px; text-align: center; margin-bottom: 10px; }
+.primary { width: 100%; height: 48px; background-color: #73dfed; color: #07242b; font-size: 17px; border-radius: 24px; }
+.secondary { width: 100%; height: 42px; background-color: #15272d; color: #b8e3e9; font-size: 14px; border-radius: 21px; margin-top: 10px; }
+.last { font-size: 12px; color: #8b9ca5; margin-top: 14px; text-align: center; }
+.link { width: 100%; height: 42px; color: #73dfed; background-color: #000000; font-size: 14px; margin-top: 8px; }
+.footer { color: #62757d; font-size: 12px; margin-top: 18px; }
 </style>

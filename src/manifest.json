@@ -1,5 +1,5 @@
 {
-  "package": "com.application.watch.demo",
+  "package": "cn.sanxiaoxing.drinky",
   "name": "Drinky",
   "versionName": "1.0.0",
   "versionCode": 1,
@@ -11,15 +11,18 @@
   ],
   "features": [
     {
-      "name": "system.router"
+      "name": "system.storage"
     },
     {
-      "name": "system.configuration"
+      "name": "system.vibrator"
+    },
+    {
+      "name": "system.router"
     }
   ],
   "config": {
     "logLevel": "log",
-    "designWidth": 480
+    "designWidth": 192
   },
   "router": {
     "entry": "pages/index",
@@ -27,8 +30,8 @@
       "pages/index": {
         "component": "index"
       },
-      "pages/detail": {
-        "component": "detail"
+      "pages/settings": {
+        "component": "settings"
       }
     }
   }

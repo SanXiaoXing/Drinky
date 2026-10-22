@@ -1,0 +1,152 @@
+<template>
+  <div class="page">
+    <div class="editor" if="pickerKey">
+      <text class="heading">{{pickerTitle}}</text>
+      <text class="hint">上下滑动选择</text>
+      <picker class="wheel" type="text" range="{{pickerRange}}" selected="{{pickerIndex}}" onchange="onPickerChange" />
+      <text class="notice" if="message">{{message}}</text>
+      <input class="confirm" type="button" value="{{saving ? '保存中…' : '确认'}}" onclick="confirmPicker" disabled="{{saving}}" />
+      <input class="link" type="button" value="取消" onclick="cancelPicker" disabled="{{saving}}" />
+    </div>
+    <scroll class="scroll" scroll-y="true" if="!pickerKey">
+      <div class="content">
+        <input class="link" type="button" value="‹ 返回首页" onclick="goBack" disabled="{{saving}}" />
+        <text class="heading">提醒与设置</text>
+        <text class="notice" if="message">{{message}}</text>
+          <text class="heading">按你的节奏</text>
+          <input class="setting" type="button" value="每杯 · {{cup}} ml" onclick="changeCup" disabled="{{!ready || saving}}" />
+          <input class="setting" type="button" value="每日目标 · {{goal}} ml" onclick="changeGoal" disabled="{{!ready || saving}}" />
+          <input class="setting" type="button" value="间隔 · {{interval}} 分钟" onclick="changeInterval" disabled="{{!ready || saving}}" />
+          <input class="setting" type="button" value="首页提醒 · {{enabled ? '开' : '关'}}" onclick="toggleEnabled" disabled="{{!ready || saving}}" />
+          <input class="setting" type="button" value="夜间免打扰 · {{quiet ? '开' : '关'}}" onclick="toggleQuiet" disabled="{{!ready || saving}}" />
+          <text class="help">免打扰时段 22:00–08:00。此提醒只在首页显示时运行，离开应用或息屏后不会主动弹出页面。</text>
+          <input class="link" type="button" value="测试振动" onclick="testVibration" />
+
+      </div>
+    </scroll>
+  </div>
+</template>
+
+<script>
+import storage from '@system.storage'
+import vibrator from '@system.vibrator'
+import router from '@system.router'
+const hydration = require('../../common/hydration')
+const KEY = 'drinky.state.v1'
+const OPTIONS = {
+  cup: { title: '每杯容量', unit: ' ml', values: [150, 250, 350, 500] },
+  goal: { title: '每日目标', unit: ' ml', values: [1000, 1500, 2000, 2500, 3000] },
+  interval: { title: '提醒间隔', unit: ' 分钟', values: [30, 45, 60, 90, 120] }
+}
+
+export default {
+  private: {
+    goal: 2000, cup: 250, interval: 60, enabled: true, quiet: true,
+    ready: false, saving: false, message: '',
+    pickerKey: '', pickerTitle: '', pickerRange: [], pickerIndex: 0
+  },
+  onInit() {
+    storage.get({
+      key: KEY,
+      success: raw => {
+        this.state = hydration.restore(raw, Date.now())
+        this.ready = true
+        this.refresh()
+      },
+      fail: () => { this.message = '记录读取失败，请重新打开应用' }
+    })
+  },
+  refresh() {
+    const s = this.state
+    this.goal = s.goal
+    this.cup = s.cup
+    this.interval = s.interval
+    this.enabled = s.enabled
+    this.quiet = s.quiet
+  },
+  goBack() { if (!this.saving) router.back() },
+  onBackPress() {
+    if (this.saving) return true
+    if (this.pickerKey) { this.cancelPicker(); return true }
+    return false
+  },
+  save(next, message, closePicker) {
+    if (!this.ready || this.saving) return
+    this.saving = true
+    storage.set({
+      key: KEY, value: JSON.stringify(next),
+      success: () => {
+        this.state = next
+        this.message = message
+        if (closePicker) this.pickerKey = ''
+        this.refresh()
+      },
+      fail: () => { this.message = '保存失败，请重试' },
+      complete: () => { this.saving = false }
+    })
+  },
+  updateSetting(key, values) {
+    const next = hydration.restore(JSON.stringify(this.state), Date.now())
+    next[key] = values[(values.indexOf(next[key]) + 1) % values.length]
+    if (key === 'interval' || key === 'quiet' || key === 'enabled') next.nextAt = hydration.nextReminder(next, Date.now())
+    this.save(next, '设置已保存')
+  },
+  openPicker(key) {
+    if (!this.ready || this.saving) return
+    const option = OPTIONS[key]
+    this.pickerTitle = option.title
+    this.pickerRange = option.values.map(value => value + option.unit)
+    this.pickerIndex = option.values.indexOf(this.state[key])
+    this.message = ''
+    this.pickerKey = key
+  },
+  onPickerChange(event) {
+    if (!this.pickerKey || this.saving) return
+    const index = event.newSelected
+    if (Number.isInteger(index) && index >= 0 && index < OPTIONS[this.pickerKey].values.length) {
+      this.pickerIndex = index
+    }
+  },
+  confirmPicker() {
+    if (!this.pickerKey || !this.ready || this.saving) return
+    const key = this.pickerKey
+    const value = OPTIONS[key].values[this.pickerIndex]
+    if (value === undefined) return
+    if (value === this.state[key]) { this.cancelPicker(); return }
+    const next = hydration.restore(JSON.stringify(this.state), Date.now())
+    next[key] = value
+    if (key === 'interval') next.nextAt = hydration.nextReminder(next, Date.now())
+    this.save(next, '设置已保存', true)
+  },
+  cancelPicker() {
+    if (this.saving) return
+    this.pickerKey = ''
+    this.message = ''
+  },
+  changeCup() { this.openPicker('cup') },
+  changeGoal() { this.openPicker('goal') },
+  changeInterval() { this.openPicker('interval') },
+  toggleEnabled() { this.updateSetting('enabled', [true, false]) },
+  toggleQuiet() { this.updateSetting('quiet', [true, false]) },
+  vibrate() {
+    try { vibrator.vibrate({ mode: 'short' }) } catch (error) { this.message = '当前设备无法振动' }
+  },
+  testVibration() { this.vibrate() }
+}
+</script>
+
+<style>
+.page { width: 100%; height: 100%; background-color: #000000; }
+.scroll { width: 100%; height: 100%; flex-direction: column; align-items: flex-start; }
+.content { width: 100%; padding: 28px 14px 32px; flex-direction: column; align-items: center; }
+.content, .heading, .setting, .help, .link, .notice { flex-shrink: 0; }
+.heading { width: 100%; font-size: 16px; color: #ffffff; margin-top: 16px; margin-bottom: 8px; text-align: center; }
+.setting { width: 100%; height: 44px; background-color: #142025; color: #e0ebee; border-radius: 14px; margin-top: 8px; font-size: 14px; }
+.help { width: 100%; color: #8b9ca5; font-size: 12px; margin-top: 12px; }
+.link { width: 100%; height: 42px; color: #73dfed; background-color: #000000; font-size: 14px; }
+.notice { width: 100%; color: #eacb8d; font-size: 13px; text-align: center; margin-top: 10px; }
+.editor { width: 100%; height: 100%; padding: 28px 14px 28px; flex-direction: column; align-items: center; }
+.hint { color: #8b9ca5; font-size: 12px; margin-top: 8px; flex-shrink: 0; }
+.wheel { width: 100%; flex: 1; min-height: 100px; color: #62757d; font-size: 16px; selected-color: #73dfed; }
+.confirm { width: 100%; height: 44px; flex-shrink: 0; background-color: #73dfed; color: #07242b; font-size: 17px; border-radius: 22px; margin-top: 8px; }
+</style>
